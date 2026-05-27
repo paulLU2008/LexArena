@@ -167,8 +167,8 @@ flowchart LR
 GEMINI_API_KEY="your_api_key_here"
 
 # (選項) 如果您使用自定義的開源 LLM，請填寫以下欄位：
-DEFAULT_LLM_MODEL="openai/gemma-4-26B-A4B-it-Claude-Opus-Distill.q4_k_m.gguf"
-DEFAULT_LLM_BASE_URL="https://your-custom-llm-endpoint.com/v1"
+DEFAULT_LLM_MODEL=""
+DEFAULT_LLM_BASE_URL=""
 ```
 
 ### 2. 一鍵啟動與停止 (Local)
