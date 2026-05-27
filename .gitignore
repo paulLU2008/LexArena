@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets
+.env
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+backend.log
+frontend.log
+scratch*.py
+knowledge_base/chroma_db/
+.env
+knowledge_base/chroma_db/

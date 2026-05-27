@@ -1,0 +1,16 @@
+fastapi>=0.115.0,<1.0.0
+uvicorn>=0.30.0,<1.0.0
+pydantic>=2.0.0,<3.0.0
+httpx>=0.27.0,<1.0.0
+crewai>=0.80.0,<1.0.0
+litellm>=1.40.0,<2.0.0
+python-dotenv>=1.0.0,<2.0.0
+streamlit>=1.30.0,<2.0.0
+folium>=0.17.0,<1.0.0
+streamlit-folium>=0.22.0,<1.0.0
+geopy>=2.4.0,<3.0.0
+# RAG 向量檢索（法務稽查官知識庫）
+chromadb~=1.1.0
+sentence-transformers>=2.2.0,<4.0.0
+langchain-text-splitters>=0.3.0,<1.0.0
+langchain-openai>=0.1.0,<1.0.0

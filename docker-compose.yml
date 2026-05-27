@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  soil-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soil-pollution-ai:latest
+    container_name: soil-ai-app
+    restart: unless-stopped
+
+    # ── 機密注入 ──────────────────────────────────────────────────────────────
+    # 在本資料夾旁放置 .env 檔，容器啟動時自動讀取，金鑰不會打包進 Image。
+    env_file:
+      - .env
+
+    # ── Port 映射 ─────────────────────────────────────────────────────────────
+    ports:
+      - "8501:8501"   # Streamlit 前端
+      - "8000:8000"   # FastAPI 後端
+
+    # ── Volume（讓資料庫檔案持久化至 Host）────────────────────────────────────
+    volumes:
+      - ./data:/app/data
+
+    # ── 健康檢查 ──────────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

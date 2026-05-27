@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" width="200" height="280">
+  <defs>
+    <linearGradient id="seaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a3a5c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d2137;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="landGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2d5a27;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e3d1b;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 海洋背景 -->
+  <rect width="200" height="280" fill="url(#seaGrad)" rx="8"/>
+
+  <!-- 台灣本島輪廓（簡化路徑，縮放至 SVG 視窗） -->
+  <path d="
+    M 95,12
+    C 100,10 108,14 112,20
+    C 118,28 120,36 118,46
+    C 122,54 128,60 130,70
+    C 134,82 132,94 128,106
+    C 130,116 134,124 136,134
+    C 138,144 136,154 132,162
+    C 128,170 122,176 116,182
+    C 110,188 104,194 100,202
+    C 96,210 94,220 90,228
+    C 86,236 80,242 74,246
+    C 68,250 62,250 58,246
+    C 54,242 52,236 54,228
+    C 56,220 62,214 66,206
+    C 70,198 70,190 68,182
+    C 66,174 62,168 60,160
+    C 58,152 58,144 60,136
+    C 62,128 66,122 68,114
+    C 70,106 70,98 68,90
+    C 66,82 62,76 60,68
+    C 58,60 58,52 62,44
+    C 66,36 72,30 78,24
+    C 84,18 90,14 95,12
+    Z
+  " fill="url(#landGrad)" stroke="#4a7c3f" stroke-width="1.5"/>
+
+  <!-- 澎湖群島（示意小島） -->
+  <ellipse cx="42" cy="148" rx="6" ry="4" fill="#2d5a27" stroke="#4a7c3f" stroke-width="1"/>
+  <ellipse cx="34" cy="156" rx="4" ry="3" fill="#2d5a27" stroke="#4a7c3f" stroke-width="1"/>
+  <ellipse cx="50" cy="158" rx="3" ry="2" fill="#2d5a27" stroke="#4a7c3f" stroke-width="1"/>
+
+  <!-- 綠島 -->
+  <ellipse cx="150" cy="200" rx="5" ry="3" fill="#2d5a27" stroke="#4a7c3f" stroke-width="1"/>
+
+  <!-- 蘭嶼 -->
+  <ellipse cx="162" cy="220" rx="6" ry="4" fill="#2d5a27" stroke="#4a7c3f" stroke-width="1"/>
+
+  <!-- 縣市標記點（供 JS 定位紅點用，透明不可見、僅作座標參考） -->
+  <!-- 依縣市名稱，cx/cy 為在此 SVG 座標系下的大概位置 -->
+  <circle id="loc-臺北市" cx="98" cy="46" r="2" fill="transparent"/>
+  <circle id="loc-台北市" cx="98" cy="46" r="2" fill="transparent"/>
+  <circle id="loc-新北市" cx="90" cy="52" r="2" fill="transparent"/>
+  <circle id="loc-基隆市" cx="106" cy="38" r="2" fill="transparent"/>
+  <circle id="loc-桃園市" cx="84" cy="62" r="2" fill="transparent"/>
+  <circle id="loc-新竹市" cx="78" cy="76" r="2" fill="transparent"/>
+  <circle id="loc-新竹縣" cx="76" cy="82" r="2" fill="transparent"/>
+  <circle id="loc-苗栗縣" cx="76" cy="92" r="2" fill="transparent"/>
+  <circle id="loc-臺中市" cx="82" cy="108" r="2" fill="transparent"/>
+  <circle id="loc-台中市" cx="82" cy="108" r="2" fill="transparent"/>
+  <circle id="loc-彰化縣" cx="78" cy="120" r="2" fill="transparent"/>
+  <circle id="loc-南投縣" cx="92" cy="122" r="2" fill="transparent"/>
+  <circle id="loc-雲林縣" cx="76" cy="132" r="2" fill="transparent"/>
+  <circle id="loc-嘉義市" cx="78" cy="144" r="2" fill="transparent"/>
+  <circle id="loc-嘉義縣" cx="80" cy="148" r="2" fill="transparent"/>
+  <circle id="loc-臺南市" cx="80" cy="162" r="2" fill="transparent"/>
+  <circle id="loc-台南市" cx="80" cy="162" r="2" fill="transparent"/>
+  <circle id="loc-高雄市" cx="84" cy="178" r="2" fill="transparent"/>
+  <circle id="loc-屏東縣" cx="84" cy="200" r="2" fill="transparent"/>
+  <circle id="loc-宜蘭縣" cx="118" cy="68" r="2" fill="transparent"/>
+  <circle id="loc-花蓮縣" cx="122" cy="130" r="2" fill="transparent"/>
+  <circle id="loc-臺東縣" cx="116" cy="178" r="2" fill="transparent"/>
+  <circle id="loc-台東縣" cx="116" cy="178" r="2" fill="transparent"/>
+  <circle id="loc-澎湖縣" cx="42" cy="152" r="2" fill="transparent"/>
+  <circle id="loc-金門縣" cx="20" cy="168" r="2" fill="transparent"/>
+  <circle id="loc-連江縣" cx="16" cy="42" r="2" fill="transparent"/>
+
+  <!-- 標題文字 -->
+  <text x="100" y="270" text-anchor="middle" fill="#7ab8d4" font-size="8" font-family="Arial, sans-serif" opacity="0.7">TAIWAN</text>
+</svg>

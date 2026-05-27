@@ -1,0 +1,14 @@
+# 機密
+.env
+
+# Python 暫存
+__pycache__
+*.pyc
+*.pyo
+
+# 資料庫（運行時自動建立）
+*.db
+
+# 開發 / 測試
+test_*.py
+pack_to_docker.py

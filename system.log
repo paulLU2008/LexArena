@@ -1,0 +1,12 @@
+===================================================
+[Starting] Soil Pollution AI Response System
+===================================================
+[1/2] Starting FastAPI Gateway (Backend) on port 8000 ...
+[2/2] Starting Streamlit Frontend on port 8501 ...
+
+System Started!
+  Frontend  (Streamlit) : http://localhost:8501
+  Backend API (FastAPI) : http://localhost:8000/docs
+===================================================
+start.sh: line 45: 59693 Killed: 9               ./venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1
+start.sh: line 45: 59694 Killed: 9               STREAMLIT_BROWSER_GATHER_USAGE_STATS=false ./venv/bin/python -m streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true > frontend.log 2>&1
