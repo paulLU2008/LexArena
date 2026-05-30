@@ -2,7 +2,7 @@
 set -e
 
 echo "==================================================="
-echo "[Starting] Soil Pollution AI Response System"
+echo "[Starting] LexArena AI Mock Court System"
 echo "==================================================="
 
 # 自動偵測並建立虛擬環境
@@ -21,26 +21,18 @@ if [ ! -d "venv" ]; then
     echo "==================================================="
 fi
 
-echo "[1/2] Starting FastAPI Gateway (Backend) on port 8000 ..."
+echo "[1/1] Starting LexArena Gateway (Backend & Frontend) on port 8000 ..."
 ./venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
 FASTAPI_PID=$!
 
-echo "[2/2] Starting Streamlit Frontend on port 8501 ..."
-STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
-  ./venv/bin/python -m streamlit run app.py \
-    --server.port 8501 \
-    --server.address 0.0.0.0 \
-    --server.headless true > frontend.log 2>&1 &
-STREAMLIT_PID=$!
-
 echo ""
 echo "System Started!"
-echo "  Frontend  (Streamlit) : http://localhost:8501"
-echo "  Backend API (FastAPI) : http://localhost:8000/docs"
+echo "  LexArena UI  : http://localhost:8000/"
+echo "  Backend API  : http://localhost:8000/docs"
 echo "==================================================="
 
-# 等待任一程序結束後，一併終止另一個 (使用相容於 macOS bash 3.2+ 的輪詢機制)
-while kill -0 $FASTAPI_PID 2>/dev/null && kill -0 $STREAMLIT_PID 2>/dev/null; do
+# 輪詢機制等待程序結束
+while kill -0 $FASTAPI_PID 2>/dev/null; do
   sleep 1
 done
-kill $FASTAPI_PID $STREAMLIT_PID 2>/dev/null
+kill $FASTAPI_PID 2>/dev/null

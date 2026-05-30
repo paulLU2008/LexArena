@@ -7,6 +7,7 @@ import re
 import os
 import sys
 import base64
+import html as html_lib
 
 # 將當前路徑加入 sys 讓 Streamlit 能 import database.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -499,6 +500,10 @@ def build_war_room_html(
 
 def build_replay_html(logs: list, svg_b64: str = "", location: str = "") -> str:
     """重播會議過程：上方戰情會議室動畫 + 下方文字時間軸"""
+    # 限制 log 數量，避免注入過大 HTML 導致前端渲染卡頓
+    if len(logs) > 500:
+        logs = logs[-500:]
+        
     logs_json      = json.dumps(logs, ensure_ascii=False)
     agent_colors   = json.dumps({k: v["color"] for k, v in AGENT_META.items()})
     agent_emojis   = json.dumps({k: v["emoji"] for k, v in AGENT_META.items()})
@@ -1168,13 +1173,19 @@ with tab1:
     color: #f8fafc;
     line-height: 2.0;
     white-space: pre-wrap;
+    word-wrap: break-word;
+    word-break: break-all;
     box-shadow: 0 4px 14px rgba(0,0,0,0.5);
 }
 .legal-doc h3 { color: #d4af37; letter-spacing: 2px; margin-top: 18px; border-bottom:1px solid #d4af3722; padding-bottom:6px; }
 .legal-doc strong { color: #facc15; }
 </style>
 """, unsafe_allow_html=True)
-                            st.markdown(f'<div class="legal-doc">{legal}</div>', unsafe_allow_html=True)
+                            # XSS 防護：對 LLM 輸出進行 HTML 轉義
+                            safe_legal = html_lib.escape(legal)
+                            # 保留基本 Markdown 格式標記（已轉義的）轉回 HTML
+                            safe_legal = safe_legal.replace('\n', '<br>')
+                            st.markdown(f'<div class="legal-doc">{safe_legal}</div>', unsafe_allow_html=True)
                         else:
                             st.info("正式判決書尚未起草。")
 
@@ -1240,7 +1251,8 @@ with tab2:
     border: 1px solid #d4af3744; border-left: 5px solid #d4af37;
     border-radius: 8px; padding: 24px 28px;
     font-family: '標楷體', Georgia, serif;
-    color: #f8fafc; line-height: 2.0; white-space: pre-wrap;
+    color: #f8fafc; line-height: 2.0; 
+    white-space: pre-wrap; word-wrap: break-word; word-break: break-all;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1276,7 +1288,9 @@ with tab2:
                     with t3:
                         legal_text = inc.get('legal_report', '')
                         if legal_text:
-                            st.html(f'<div class="legal-doc-hist">{legal_text}</div>')
+                            # XSS 防護：對歷史判決書 LLM 輸出進行 HTML 轉義
+                            safe_legal_text = html_lib.escape(legal_text).replace('\n', '<br>')
+                            st.html(f'<div class="legal-doc-hist">{safe_legal_text}</div>')
                         else:
                             st.info("此案件尚無正式判決書。")
 

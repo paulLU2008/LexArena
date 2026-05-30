@@ -15,40 +15,12 @@ class GenerateImageTool(BaseTool):
     # args_schema: Type[BaseModel] = GenerateImageInputSchema
 
     def _run(self, prompt: str = None, **kwargs) -> str:
-        # 1. 處理輸入極限容錯：不論 LLM 傳入 dict、list 還是 raw string，皆能安全解析
-        actual_prompt = ""
-        if prompt:
-            actual_prompt = prompt
-        elif kwargs:
-            if "prompt" in kwargs:
-                actual_prompt = kwargs["prompt"]
-            elif "query" in kwargs:
-                actual_prompt = kwargs["query"]
-            else:
-                actual_prompt = " ".join(str(v) for v in kwargs.values())
-        
-        # 2. 如果傳入的 prompt 是 JSON 字串，進行二次解析
-        if isinstance(actual_prompt, str):
-            trimmed = actual_prompt.strip()
-            if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
-                try:
-                    import json
-                    parsed = json.loads(trimmed)
-                    if isinstance(parsed, dict):
-                        actual_prompt = parsed.get("prompt") or parsed.get("query") or str(list(parsed.values())[0])
-                    elif isinstance(parsed, list) and len(parsed) > 0:
-                        if isinstance(parsed[0], dict):
-                            actual_prompt = parsed[0].get("prompt") or parsed[0].get("query") or str(list(parsed[0].values())[0])
-                        else:
-                            actual_prompt = str(parsed[0])
-                except Exception:
-                    pass
-
-        # 3. 確保 actual_prompt 有預設值，不為空
-        if not actual_prompt or not isinstance(actual_prompt, str) or len(actual_prompt.strip()) == 0:
-            actual_prompt = "Soil heavy metal pollution response site"
-
-        prompt = actual_prompt
+        # 使用共用容錯解析工具
+        from tools._utils import parse_tool_input
+        prompt = parse_tool_input(
+            prompt, kwargs, key_name="prompt",
+            default="A scales of justice in a warm light courtroom, photographic, high resolution",
+        )
 
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:

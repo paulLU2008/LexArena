@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "==================================================="
-echo "[Stopping] Soil Pollution AI Response System"
+echo "[Stopping] LexArena AI Mock Court System"
 echo "==================================================="
 
 echo "正在終止 FastAPI 後端服務 (Port 8000)..."

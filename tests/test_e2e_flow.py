@@ -37,7 +37,7 @@ def print_separator(char="=", length=80):
 
 def run_e2e_test():
     print_separator()
-    print(f"{Colors.BOLD}🌱 土壤污染 AI 應變系統 — 後端 E2E 完整流程測試腳本{Colors.ENDC}")
+    print(f"{Colors.BOLD}⚖️ LexArena AI 模擬法庭系統 — 後端 E2E 完整流程測試腳本{Colors.ENDC}")
     print_separator()
 
     # 1. 測試測資
@@ -165,10 +165,10 @@ def run_e2e_test():
                         
                         # 驗證內容長度與基本格式
                         reports = {
-                            "🎖️ 總指揮官計畫": commander_plan,
-                            "⚙️ 行動官處置方案": operations_plan,
-                            "⚖️ 法務官裁處書草案": legal_report,
-                            "📢 公關官新聞發稿": response_plan
+                            "⚖️ 審判長判決書": commander_plan,
+                            "⚔️ 控辯攻防記錄": operations_plan,
+                            "📖 法務研析報告": legal_report,
+                            "📢 白話判決新聞稿": response_plan
                         }
                         
                         all_valid = True
@@ -181,8 +181,8 @@ def run_e2e_test():
                                 
                         if all_valid:
                             print_separator("-")
-                            log_success("🎉 所有應變官員的專業報告均高質量生成完畢！")
-                            log_success("📝 SQLite 資料庫與 MeetingLogs 會議紀錄均已寫入完成！")
+                            log_success("🎉 所有法庭 Agent 的專業報告均高質量生成完畢！")
+                            log_success("📝 SQLite 資料庫與 MeetingLogs 法庭紀錄均已寫入完成！")
                             print_separator()
                         else:
                             log_warning("⚠️ 部分報告內容驗證未通過，請檢查後台 API 日誌。")

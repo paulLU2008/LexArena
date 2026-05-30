@@ -4,242 +4,29 @@ import queue
 import threading
 import json
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from datetime import datetime
 import os
 import litellm
 
-# 【開機即攔截】確保 litellm 請求與遠端 vLLM 相容
-# 核心問題：
-#   1. vLLM 伺服器預設 enable_thinking=True，與 assistant prefill 不相容 → 400
-#   2. vLLM 不允許 2+ 個連續 assistant 訊息位於尾端 → 400
-# 解法：偵測並修正訊息序列，確保相容。
-def _patch_for_prefill_compat(kwargs):
-    """確保 messages 結構與 vLLM 伺服器相容"""
-    # 移除 litellm 層級可能注入的 thinking 參數
-    for k in ["enable_thinking", "thinking", "budget_tokens"]:
-        kwargs.pop(k, None)
+# ─────────────────────────────────────────────
+# LLM 補丁：從獨立模組載入並安裝
+# ─────────────────────────────────────────────
+from llm_patches import install_patches, clean_think_tags
+install_patches()
 
-    messages = kwargs.get("messages", [])
-    if not messages:
-        return kwargs
-
-    # ── 修復 1：清理整個歷史紀錄中的 <think> 標籤與 redundant Thought 前綴 ──
-    # 防止 Token 數隨對話次數指數上升，導致爆 context (如 151k 報錯)
-    for msg in messages:
-        if msg.get("role") == "assistant" and msg.get("content"):
-            content = msg["content"]
-            # 移除 <think>...</think>
-            content = _THINK_TAG_RE.sub('', content)
-            # 移除未閉合的 <think>
-            content = _OPEN_THINK_RE.sub('', content)
-            # 移除重複的 Thought:
-            content = content.replace("Thought: Thought:", "Thought:").strip()
-            msg["content"] = content
-
-    # ── 修復 2：合併尾端多個連續 assistant 訊息 ──
-    # vLLM 不接受尾端有 2+ 個 assistant 訊息，
-    # 將它們合併為一則，保留完整內容。
-    while (
-        len(messages) >= 2
-        and isinstance(messages[-1], dict)
-        and isinstance(messages[-2], dict)
-        and messages[-1].get("role") == "assistant"
-        and messages[-2].get("role") == "assistant"
-    ):
-        # 將倒數第二個 assistant 的內容合併到最後一個
-        prev_content = messages[-2].get("content", "") or ""
-        last_content = messages[-1].get("content", "") or ""
-        merged = (prev_content + "\n" + last_content).strip()
-        messages.pop(-2)
-        messages[-1]["content"] = merged
-
-    kwargs["messages"] = messages
-
-    # ── 修復 3：偵測 assistant prefill → 關閉 enable_thinking ──
-    has_prefill = (
-        messages
-        and isinstance(messages[-1], dict)
-        and messages[-1].get("role") == "assistant"
-    )
-
-    if has_prefill:
-        # 注入 extra_body 告知 vLLM 伺服器關閉 thinking 以相容 prefill
-        extra = kwargs.get("extra_body", {}) or {}
-        ctk = extra.get("chat_template_kwargs", {}) or {}
-        ctk["enable_thinking"] = False
-        extra["chat_template_kwargs"] = ctk
-        kwargs["extra_body"] = extra
-
-    return kwargs
-
-_THINK_TAG_RE     = re.compile(r'<think>(.*?)</think>\s*', re.DOTALL)
-_OPEN_THINK_RE    = re.compile(r'<think>(.*)', re.DOTALL)
-# Qwen3 / Yi 系列模型的思考標籤格式 <|channel>thought ... <|channel>response
-_CHANNEL_THINK_RE = re.compile(r'<\|channel\|?>thought.*?<\|channel\|?>response\s*', re.DOTALL)
-_OPEN_CHANNEL_RE  = re.compile(r'<\|channel\|?>thought(.*)', re.DOTALL)
-
-def _clean_action_input(tool_name, raw_input):
-    trimmed = raw_input.strip()
-    
-    # Try parsing as JSON first
-    parsed = None
-    try:
-        parsed = json.loads(trimmed)
-    except Exception:
-        # try simple cleaning (removing markdown code fences)
-        clean_str = re.sub(r'^(```json|```)|(```)$', '', trimmed, flags=re.MULTILINE).strip()
-        try:
-            parsed = json.loads(clean_str)
-        except Exception:
-            pass
-
-    if parsed is not None:
-        if isinstance(parsed, dict):
-            return json.dumps(parsed, ensure_ascii=False)
-        elif isinstance(parsed, list) and len(parsed) > 0:
-            first = parsed[0]
-            if isinstance(first, dict):
-                return json.dumps(first, ensure_ascii=False)
-            else:
-                trimmed = str(first).strip()
-    
-    if tool_name == 'LegalRAGTool':
-        return json.dumps({'query': trimmed}, ensure_ascii=False)
-    elif tool_name == 'GenerateImageTool':
-        return json.dumps({'prompt': trimmed}, ensure_ascii=False)
-    
-    return json.dumps({'query': trimmed}, ensure_ascii=False)
-
-def _patch_action_inputs(content):
-    if not content:
-        return content
-    
-    pattern = r'(Action:\s*(\w+)\s*\n\s*Action Input:\s*)([\s\S]+?)(?=\n\s*(?:Action:|Thought:)|$)'
-    
-    def repl(match):
-        prefix = match.group(1)
-        tool_name = match.group(2)
-        raw_val = match.group(3)
-        cleaned_val = _clean_action_input(tool_name, raw_val)
-        return prefix + cleaned_val + '\n'
-        
-    return re.sub(pattern, repl, content)
-
-def _strip_think_from_response(response):
-    """從 LLM 回應中移除 <think>...</think> 標籤。
-    Qwen reasoning 模型會在回答前加上 <think> 區塊，
-    CrewAI 的 action parser 無法處理這些標籤。
-
-    策略：
-    1. 剝離 <think> 標籤，保留標籤外的內容
-    2. 若剝離後內容為空 → 用 <think> 內的文字當回應（總比空好）
-    3. 若 content 本身為空 → 嘗試用 reasoning_content 欄位
-    """
-    try:
-        for choice in response.choices:
-            content = getattr(choice.message, 'content', None)
-
-            # 情況 A：content 為空但有 reasoning_content（vLLM thinking mode）
-            if not content:
-                rc = getattr(choice.message, 'reasoning_content', None)
-                if rc:
-                    choice.message.content = rc.strip()
-                continue
-
-            # 先處理 <|channel>thought 標籤（Qwen3 / Yi 等模型）
-            if '<|channel' in content:
-                # 移除完整的 <|channel>thought ... <|channel>response 區塊
-                content = _CHANNEL_THINK_RE.sub('', content)
-                # 防禦：若只有開頭沒有閉合，直接把標籤字眼拿掉，保留其餘本文
-                content = content.replace("<|channel>thought", "")
-                content = content.replace("<|channel>response", "")
-                content = content.replace("<|channel >thought", "")
-                content = content.replace("<|channel >response", "")
-                content = content.strip()
-                choice.message.content = content if content else choice.message.content
-
-            if '<think>' not in content:
-                # 即使沒有 <think> 標籤，也要修復 Action Input
-                if choice.message.content:
-                    choice.message.content = _patch_action_inputs(choice.message.content)
-                continue
-
-            # 提取 <think> 內的文字（作為備用）
-            think_match = _THINK_TAG_RE.search(content)
-            think_text = think_match.group(1).strip() if think_match else ""
-
-            # 剝離完整的 <think>...</think> 區塊
-            cleaned = _THINK_TAG_RE.sub('', content)
-            
-            # 移除常見的冗餘前綴（例如 Thought: Thought: ...）
-            cleaned = cleaned.replace("Thought: Thought:", "Thought:").strip()
-
-            # 【防禦性修復】若模型崩潰並輸出 ReAct 恐慌套話或模板指令，立即攔截並轉為高質量備援情報，保障 CrewAI 穩定度與下游 Agent context
-            lower_cleaned = cleaned.lower()
-            if (
-                "i must not" in lower_cleaned or 
-                "hallucinate" in lower_cleaned or 
-                "must not make up" in lower_cleaned or 
-                "action: the action to take" in lower_cleaned or 
-                "only one name of" in lower_cleaned or 
-                "don't exist, these are the only available" in lower_cleaned
-            ):
-                cleaned = (
-                    "Thought: 由於模型 ReAct 格式解析遇到異常，系統已自動啟動防禦性降級，提供最嚴謹的法律分析備援。\n"
-                    "Final Answer: AI 法庭分析系統已啟動防禦性備援，提供以下初步法律分析：\n"
-                    "1. 【事實認定】根據案情描述，本案涉及之當事人關係與爭議事實已初步釐清，惟因系統異常，詳細事實認定需進一步審理。\n"
-                    "2. 【法律適用】本案可能涉及中華民國刑法或民法相關條文，建議依據案件類型進行深入的法條檢索與適用性分析。\n"
-                    "3. 【初步建議】建議當事人保全相關證據，並諮詢專業律師以獲取更完整的法律意見。本系統將在恢復正常後重新進行完整的法庭模擬分析。"
-                )
-
-            # 【核心修復】防止推理模型忘記輸出 'Final Answer:' 標籤
-            # 如果內容中沒有 Action: 也沒有 Final Answer:，且看起來不是純思考
-            elif "Action:" not in cleaned and "Final Answer:" not in cleaned:
-                if len(cleaned) > 20: # 稍微有點長度才當作答案
-                    cleaned = f"Final Answer: {cleaned}"
-            
-            # 防禦：只有開頭 <think> 但沒有閉合 </think>
-            open_match = _OPEN_THINK_RE.search(cleaned)
-            if open_match:
-                think_text = think_text or open_match.group(1).strip()
-                cleaned = _OPEN_THINK_RE.sub('', cleaned)
-
-            cleaned = cleaned.strip()
-
-            if cleaned:
-                # 剝離成功，有實際內容
-                choice.message.content = cleaned
-            elif think_text:
-                # 全部內容都在 <think> 裡 → 用思考內容當回應
-                choice.message.content = think_text
-            # else: 保持原樣不動
-
-            # 在 choice 結束前修復 Action Input
-            if choice.message.content:
-                choice.message.content = _patch_action_inputs(choice.message.content)
-    except (AttributeError, IndexError, TypeError):
-        pass
-    return response
-
-_oc = litellm.completion
-_oac = litellm.acompletion
-
-def _patched_completion(*a, **k):
-    resp = _oc(*a, **_patch_for_prefill_compat(k))
-    return _strip_think_from_response(resp)
-
-async def _patched_acompletion(*a, **k):
-    resp = await _oac(*a, **_patch_for_prefill_compat(k))
-    return _strip_think_from_response(resp)
-
-litellm.completion = _patched_completion
-litellm.acompletion = _patched_acompletion
-litellm.drop_params = True
+# ─────────────────────────────────────────────
+# 日誌解析：從獨立模組載入
+# ─────────────────────────────────────────────
+from log_parser import (
+    strip_ansi, detect_agent, classify_log,
+    clean_bubble_text, AGENT_START_MSGS,
+)
 
 import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
@@ -250,12 +37,38 @@ from database import init_db, save_incident, save_meeting_logs
 # 載入環境變數
 load_dotenv()
 
-app = FastAPI(title="中華民國 AI 模擬法庭與判決分析系統 Gateway", version="3.0.0")
-
-# 啟動時初始化資料庫（含新的 MeetingLogs 表）
-@app.on_event("startup")
-def startup_event():
+# 应用生命週期管理
+@asynccontextmanager
+async def lifespan(app):
+    # 啟動時初始化資料庫
     init_db()
+    yield
+
+app = FastAPI(
+    title="中華民國 AI 模擬法庭與判決分析系統 Gateway",
+    version="3.0.0",
+    lifespan=lifespan,
+)
+
+# CORS 中介層：允許 index.html 從不同 origin 存取 API
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+def serve_index():
+    """Serve the LexArena landing page"""
+    return FileResponse("index.html")
+
+@app.get("/health")
+def health_check():
+    """Docker healthcheck 端點"""
+    return {"status": "ok"}
 
 class IncidentReport(BaseModel):
     report_text: str = Field(..., description="原始通報或新聞文字內容")
@@ -276,98 +89,31 @@ class IncidentReport(BaseModel):
         }
     }
 
-# ─────────────────────────────────────────────
-# 日誌清洗：去除 ANSI 色碼與無義控制符
-# ─────────────────────────────────────────────
-_ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub('', text)
+class ConnectionTestRequest(BaseModel):
+    model_name: str | None = Field(None, description="動態指定的 LLM 模型名稱")
+    api_key: str | None = Field(None, description="動態指定的 API Key")
+    base_url: str | None = Field(None, description="動態指定的 API Base URL")
 
 # ─────────────────────────────────────────────
-# 日誌結構化解析：將一行 CrewAI stdout 轉成有語意的字典
+# 系統日誌設定 (Log Rotation)
 # ─────────────────────────────────────────────
-
-# Agent 名稱對照表（匹配 CrewAI verbose 輸出中的角色字串）
-_AGENT_PATTERNS = [
-    ("COMMANDER",     ["審判長", "Judge", "總指揮官", "Commander"]),
-    ("INTELLIGENCE",  ["事實調查官", "Fact Investigator", "情報分析官", "Intelligence"]),
-    ("OPERATIONS",    ["控辯雙方論證專家", "Prosecutor & Defense", "行動策劃官", "Operations"]),
-    ("LEGAL",         ["法學研究員", "Legal Scholar", "法務稽查官", "Legal"]),
-    ("PR",            ["判決通報官", "Verdict PR", "公關通報官", "PR Agent"]),
-]
-
-# Agent 切換時立即推送的「開始執行」通知（不等 LLM 輸出）
-_AGENT_START_MSGS = {
-    "COMMANDER":    "⚖️ 審判長開始審理兩造主張，並準備起草正式司法判決書...",
-    "INTELLIGENCE": "🔎 事實調查官開始分析案情，提取起訴事實、當事人與核心爭點...",
-    "OPERATIONS":   "⚔️ 控辯雙方論證專家正在模擬原告（控方）與被告（辯方）的法庭辯論攻防...",
-    "LEGAL":        "📖 法學研究員正在跨庫檢索中華民國憲法、刑法、民法條文（RAG）...",
-    "PR":           "📢 判決通報官準備撰寫白話判決懶人包與新聞稿，並生成 AI 法庭配圖...",
-}
-
-
-# CrewAI 正式 Agent 切換行的固定格式（只匹配這些才算真正切換）
-_AGENT_TRANSITION_RE = re.compile(
-    r'Agent:\s*(.+)',
-    re.IGNORECASE
-)
-
-def _detect_agent(text: str) -> str | None:
-    """只在 CrewAI 正式 Agent transition 行中偵測 Agent 名稱。
-    避免在 tool output / error messages 中誤觸。
-    """
-    m = _AGENT_TRANSITION_RE.search(text)
-    if not m:
-        return None
-    matched_name = m.group(1)
-    for code, patterns in _AGENT_PATTERNS:
-        if any(p in matched_name for p in patterns):
-            return code
-    return None
-
-def _classify_log(text: str) -> str:
-    """將一行 CrewAI stdout 分類為 THOUGHT / ACTION / RESULT / SYSTEM / SKIP"""
-    t = text.strip()
-    if not t or len(t) < 5:
-        return "SKIP"
-    # CrewAI verbose 的分隔行與無意義行
-    if set(t) <= set("═─=- \n") or t.startswith("====") or t.startswith("────"):
-        return "SKIP"
-    # CrewAI 系統噪音行（不含有效資訊）
-    _SKIP_PREFIXES = (
-        "## Agent", "Working Agent:", "# Agent:", "# Task:",
-        "Task completed", "> Entering", "Retrying", "[1m",
-        "╭─", "╰─", "│", "├", "└", "✅",
-        "Agent stopped", "Assigned to:", "Status:", "Crew:",
-    )
-    if t.startswith(_SKIP_PREFIXES):
-        return "SKIP"
-    # 子字串比對（處理含 emoji 前綴的情況，例如 '🚀 Crew: crew'）
-    if "Crew:" in t or "Executing Task" in t or "Task execution started" in t:
-        return "SKIP"
-    # 過濾 LLM 思考標籤（<|channel>thought、<think> 等）漏出到 ticker
-    if "<|channel" in t or "<think>" in t or "</think>" in t:
-        return "SKIP"
-    if "Agent:" in t or "Working Agent:" in t or "Task:" in t or "Started Task" in t or "Assigned to:" in t or "Status:" in t:
-        return "SYSTEM"
-    if "Thought:" in t or "思考" in t:
-        return "THOUGHT"
-    if "Action:" in t or "Using tool" in t or "Tool Input" in t or "呼叫工具" in t:
-        return "ACTION"
-    if "Final Answer:" in t or "最終答案" in t or "Task output" in t:
-        return "RESULT"
-    return "THOUGHT"  # 其他可見文字預設歸為思考
-
-# 移除氣泡顯示文字中的 CrewAI 前綴，只保留實際內容
-_BUBBLE_PREFIX_RE = re.compile(
-    r'^(Thought|Action|Final Answer|Observation|Tool Input|Action Input|THOUGHT|ACTION)\s*:\s*',
-    re.IGNORECASE
-)
-
-def _clean_bubble_text(text: str) -> str:
-    """去掉 CrewAI 前綴，回傳乾淨可讀的氣泡文字"""
-    return _BUBBLE_PREFIX_RE.sub('', text).strip()
+logger = logging.getLogger("LexArena")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    # 輸出至 terminal，避免被 thread-local stdout 捕捉
+    ch = logging.StreamHandler(sys.__stdout__)
+    ch.setLevel(logging.INFO)
+    
+    # 建立 5MB 大小的循環日誌，最多保留 3 份備份
+    fh = RotatingFileHandler("backend.log", maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+    
+    logger.addHandler(ch)
+    logger.addHandler(fh)
 
 # ─────────────────────────────────────────────
 # Thread-local stdout 隔離（防止多請求日誌串台）
@@ -385,14 +131,14 @@ class QueueWriter:
         buf += raw
         
         # 即使還沒遇到換行，也提早檢查是否出現 Agent 切換（解決 rich.console 卡換行的延遲問題）
-        agent = _detect_agent(_strip_ansi(buf).strip())
+        agent = detect_agent(strip_ansi(buf).strip())
         prev_agent = getattr(_thread_local, 'current_agent', 'SYSTEM')
         if agent and agent != prev_agent:
             _thread_local.current_agent = agent
             last_pushed = getattr(_thread_local, 'last_pushed_agent', None)
             if agent != last_pushed:
                 _thread_local.last_pushed_agent = agent
-                start_msg = _AGENT_START_MSGS.get(agent, f"🚀 {agent} 開始執行任務...")
+                start_msg = AGENT_START_MSGS.get(agent, f"🚀 {agent} 開始執行任務...")
                 self.q.put({
                     "type":     "agent_log",
                     "agent":    agent,
@@ -417,7 +163,7 @@ class QueueWriter:
         _thread_local.line_buffer = buf
 
     def _process_line(self, raw_line: str):
-        clean = _strip_ansi(raw_line).strip()
+        clean = strip_ansi(raw_line).strip()
         if not clean:
             return
 
@@ -438,7 +184,7 @@ class QueueWriter:
             return
 
         # 偵測 Agent 切換：只在 CrewAI 正式 transition 行觸發
-        agent = _detect_agent(clean)
+        agent = detect_agent(clean)
         prev_agent = getattr(_thread_local, 'current_agent', 'SYSTEM')
         if agent and agent != prev_agent:
             _thread_local.current_agent = agent
@@ -450,12 +196,12 @@ class QueueWriter:
                     "type":     "agent_log",
                     "agent":    agent,
                     "log_type": "THOUGHT",
-                    "content":  _AGENT_START_MSGS.get(agent, f"🚀 {agent} 開始執行任務..."),
+                    "content":  AGENT_START_MSGS.get(agent, f"🚀 {agent} 開始執行任務..."),
                 })
         elif agent:
             _thread_local.current_agent = agent
 
-        log_type = _classify_log(clean)
+        log_type = classify_log(clean)
         if log_type == "SKIP":
             return
 
@@ -475,7 +221,7 @@ class QueueWriter:
         if log_type not in ("THOUGHT", "ACTION"):
             return
 
-        bubble_text = _clean_bubble_text(clean)[:500]
+        bubble_text = clean_bubble_text(clean)[:500]
         if not bubble_text:
             return
 
@@ -549,8 +295,8 @@ def _make_step_callback(q: queue.Queue):
             getattr(agent_action, 'result', None) or
             str(agent_action)
         )
-        content = _strip_ansi(str(content)).strip()[:300]
-        bubble  = _clean_bubble_text(content)[:120]
+        content = strip_ansi(str(content)).strip()[:300]
+        bubble  = clean_bubble_text(content)[:120]
         if not bubble or len(bubble) < 3:
             return
 
@@ -574,18 +320,20 @@ def _get_task_output_safe(crew, index: int) -> str:
     import re
 
     # 1. 移除 <think>...</think> 標籤及其內容
-    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
+    raw = clean_think_tags(raw)
     # 2. 移除 <|channel|> 等特殊控制 token
     raw = re.sub(r'<\|?[a-zA-Z_]+\|?>', '', raw)
 
     # 3. 偵測正式文件起始點：截斷前方的 LLM 思考或提示詞殘留（如 "Please ensure all keys..."）
+    # 移除過於通用的 '臺灣'，避免誤切截到文件尾端
     doc_markers = ['【法院名稱】', '【判決主文】', '【事實】', '【理由】',
-                   '【當事人】', '臺灣', '# 【', '## 【', '---\n#',
-                   '**【法院名稱】', '**【判決主文】']
+                   '【當事人】', '# 【', '## 【', '---\n#',
+                   '**【法院名稱】', '**【判決主文】', '【判決懶人包】']
     earliest_pos = -1
     for marker in doc_markers:
         pos = raw.find(marker)
-        if 0 < pos < 1500:
+        # 只檢查前 800 字元，避免匹配到文件尾端導致內容被大量截斷
+        if 0 < pos < 800:
             if earliest_pos == -1 or pos < earliest_pos:
                 earliest_pos = pos
 
@@ -654,9 +402,7 @@ def run_crew_in_background(crew, inputs, q: queue.Queue, fallback_check_fn):
     except Exception as e:
         import traceback
         tb_str = traceback.format_exc()
-        print("====== BACKEND CRITICAL EXCEPTION ======")
-        print(tb_str)
-        print("========================================")
+        logger.error("====== BACKEND CRITICAL EXCEPTION ======\n%s\n========================================", tb_str)
         q.put({"type": "error", "error": f"{str(e)}\n{tb_str}"})
     finally:
         _thread_local.writer = None
@@ -706,6 +452,30 @@ def handle_incident_report(report: IncidentReport):
                 yield ": keep-alive\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.post("/api/v1/test_connection")
+def test_connection(req: ConnectionTestRequest):
+    try:
+        kwargs = {
+            "messages": [{"role": "user", "content": "Ping. Please reply 'Pong' only."}],
+            "max_tokens": 10,
+        }
+        
+        # 預設 fallback
+        model = req.model_name.strip() if req.model_name else "gemini/gemini-2.5-flash"
+        kwargs["model"] = model
+        
+        if req.api_key:
+            kwargs["api_key"] = req.api_key.strip()
+            
+        if req.base_url:
+            kwargs["api_base"] = req.base_url.strip()
+
+        response = litellm.completion(**kwargs)
+        
+        return {"status": "success", "message": "連線成功！模型回應正常。"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

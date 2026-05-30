@@ -123,36 +123,12 @@ class LegalRAGTool(BaseTool):
     )
 
     def _run(self, query: str = None, **kwargs) -> str:
-        # 1. 極限容錯輸入解析
-        actual_query = ""
-        if query:
-            actual_query = query
-        elif kwargs:
-            if "query" in kwargs:
-                actual_query = kwargs["query"]
-            else:
-                actual_query = " ".join(str(v) for v in kwargs.values())
-        
-        # 二次 JSON 解析
-        if isinstance(actual_query, str):
-            trimmed = actual_query.strip()
-            if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
-                try:
-                    parsed = json.loads(trimmed)
-                    if isinstance(parsed, dict) and "query" in parsed:
-                        actual_query = parsed["query"]
-                    elif isinstance(parsed, list) and len(parsed) > 0:
-                        if isinstance(parsed[0], dict) and "query" in parsed[0]:
-                            actual_query = parsed[0]["query"]
-                        else:
-                            actual_query = str(parsed[0])
-                except Exception:
-                    pass
-
-        if not actual_query or not isinstance(actual_query, str) or len(actual_query.strip()) == 0:
-            actual_query = "共同正犯、民事損害賠償、不當得利、竊盜罪"
-
-        query = actual_query
+        # 使用共用容錯解析工具
+        from tools._utils import parse_tool_input
+        query = parse_tool_input(
+            query, kwargs, key_name="query",
+            default="共同正犯、民事損害賠償、不當得利、竊盜罪",
+        )
 
         # 2. 建立或載入 collections
         try:

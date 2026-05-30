@@ -18,9 +18,8 @@ def create_incident_response_crew(model_name=None, api_key=None, base_url=None):
     target_key = api_key or os.getenv("DEFAULT_LLM_API_KEY") or "no-key"
     target_url = base_url or os.getenv("DEFAULT_LLM_BASE_URL")
 
-    # 強制環境變數
-    os.environ["OPENAI_API_KEY"] = target_key
-    os.environ["OPENAI_API_BASE"] = target_url
+    # 注意：不再覆寫 os.environ，避免多用戶併發時互相覆蓋認證資訊
+    # API Key 與 Base URL 直接透過 LLM 物件參數傳入
 
     # 使用標準 LLM — prefill 相容性由 main.py 處理
     llm = LLM(
@@ -154,7 +153,7 @@ def create_incident_response_crew(model_name=None, api_key=None, base_url=None):
         ),
         expected_output="條理分明的法庭兩造（原告與被告）辯論攻防與主張清單。",
         agent=prosecution_defense,
-        context=[intelligence_task]
+        context=[extraction_task, intelligence_task]
     )
 
     # Task 3: 審判主文與量刑裁決 (TASK_INDEX_LEGAL)

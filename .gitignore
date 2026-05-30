@@ -27,3 +27,4 @@ scratch*.py
 knowledge_base/chroma_db/
 .env
 knowledge_base/chroma_db/
+*.log
